@@ -17,12 +17,14 @@ import std.algorithm;
 import std.array;
 import std.conv;
 import std.datetime;
+import std.exception;
 import std.getopt;
 import std.random;
 import std.range;
 import std.stdio;
 import std.string;
 import std.socket;
+import std.traits;
 
 version(Windows)
 	static if (__VERSION__ >= 2067)
@@ -114,108 +116,8 @@ struct DHCPPacket
 
 enum DHCPOptionType : ubyte
 {
-	subnetMask = 1,
-	timeOffset = 2,
-	router = 3,
-	timeServer = 4,
-	nameServer = 5,
-	domainNameServer = 6,
-	domainName = 15,
-	broadcastServerOption = 28,
-	netbiosNodeType = 46,
-	leaseTime = 51,
 	dhcpMessageType = 53,
-	serverIdentifier = 54,
 	parameterRequestList = 55,
-	renewalTime = 58,
-	rebindingTime = 59,
-	vendorClassIdentifier = 60,
-	tftpServerName = 66,
-	bootfileName = 67,
-}
-
-string[ubyte] dhcpOptionNames;
-static this()
-{
-	dhcpOptionNames =
-	[
-		  0 : "Pad Option",
-		  1 : "Subnet Mask",
-		  2 : "Time Offset",
-		  3 : "Router Option",
-		  4 : "Time Server Option",
-		  5 : "Name Server Option",
-		  6 : "Domain Name Server Option",
-		  7 : "Log Server Option",
-		  8 : "Cookie Server Option",
-		  9 : "LPR Server Option",
-		 10 : "Impress Server Option",
-		 11 : "Resource Location Server Option",
-		 12 : "Host Name Option",
-		 13 : "Boot File Size Option",
-		 14 : "Merit Dump File",
-		 15 : "Domain Name",
-		 16 : "Swap Server",
-		 17 : "Root Path",
-		 18 : "Extensions Path",
-		 19 : "IP Forwarding Enable/Disable Option",
-		 20 : "Non-Local Source Routing Enable/Disable Option",
-		 21 : "Policy Filter Option",
-		 22 : "Maximum Datagram Reassembly Size",
-		 23 : "Default IP Time-to-live",
-		 24 : "Path MTU Aging Timeout Option",
-		 25 : "Path MTU Plateau Table Option",
-		 26 : "Interface MTU Option",
-		 27 : "All Subnets are Local Option",
-		 28 : "Broadcast Address Option",
-		 29 : "Perform Mask Discovery Option",
-		 30 : "Mask Supplier Option",
-		 31 : "Perform Router Discovery Option",
-		 32 : "Router Solicitation Address Option",
-		 33 : "Static Route Option",
-		 34 : "Trailer Encapsulation Option",
-		 35 : "ARP Cache Timeout Option",
-		 36 : "Ethernet Encapsulation Option",
-		 37 : "TCP Default TTL Option",
-		 38 : "TCP Keepalive Interval Option",
-		 39 : "TCP Keepalive Garbage Option",
-		 40 : "Network Information Service Domain Option",
-		 41 : "Network Information Servers Option",
-		 42 : "Network Time Protocol Servers Option",
-		 43 : "Vendor Specific Information",
-		 44 : "NetBIOS over TCP/IP Name Server Option",
-		 45 : "NetBIOS over TCP/IP Datagram Distribution Server Option",
-		 46 : "NetBIOS over TCP/IP Node Type Option",
-		 47 : "NetBIOS over TCP/IP Scope Option",
-		 48 : "X Window System Font Server Option",
-		 49 : "X Window System Display Manager Option",
-		 50 : "Requested IP Address",
-		 51 : "IP Address Lease Time",
-		 52 : "Option Overload",
-		 53 : "DHCP Message Type",
-		 54 : "Server Identifier",
-		 55 : "Parameter Request List",
-		 56 : "Message",
-		 57 : "Maximum DHCP Message Size",
-		 58 : "Renewal (T1) Time Value",
-		 59 : "Rebinding (T2) Time Value",
-		 60 : "Vendor class identifier",
-		 61 : "Client-identifier",
-		 64 : "Network Information Service+ Domain Option",
-		 65 : "Network Information Service+ Servers Option",
-		 66 : "TFTP server name",
-		 67 : "Bootfile name",
-		 68 : "Mobile IP Home Agent option",
-		 69 : "Simple Mail Transport Protocol (SMTP) Server Option",
-		 70 : "Post Office Protocol (POP3) Server Option",
-		 71 : "Network News Transport Protocol (NNTP) Server Option",
-		 72 : "Default World Wide Web (WWW) Server Option",
-		 73 : "Default Finger Server Option",
-		 74 : "Default Internet Relay Chat (IRC) Server Option",
-		 75 : "StreetTalk Server Option",
-		 76 : "StreetTalk Directory Assistance (STDA) Server Option",
-		255 : "End Option",
-	];
 }
 
 enum DHCPMessageType : ubyte
@@ -233,9 +135,121 @@ enum DHCPMessageType : ubyte
 enum NETBIOSNodeType : ubyte
 {
 	bNode = 1,
-	pNode,
-	mMode,
-	hNode
+	pNode = 2,
+	mMode = 4,
+	hNode = 8
+}
+enum NETBIOSNodeTypeChars = "BPMH";
+
+/// How option values are displayed and interpreted
+enum OptionFormat
+{
+	none,
+	str,
+	ip,
+	IP = ip, // for backwards compatibility
+	hex,
+	boolean,
+	u8,
+	u16,
+	u32,
+	i32 = u32, // for backwards compatibility
+	time,
+	dhcpMessageType,
+	dhcpOptionType,
+	netbiosNodeType,
+	relayAgent, // RFC 3046
+}
+
+struct DHCPOptionSpec
+{
+	string name;
+	OptionFormat format;
+}
+
+DHCPOptionSpec[ubyte] dhcpOptions;
+static this()
+{
+	dhcpOptions =
+	[
+		  0 : DHCPOptionSpec("Pad Option", OptionFormat.none),
+		  1 : DHCPOptionSpec("Subnet Mask", OptionFormat.ip),
+		  2 : DHCPOptionSpec("Time Offset", OptionFormat.time),
+		  3 : DHCPOptionSpec("Router Option", OptionFormat.ip),
+		  4 : DHCPOptionSpec("Time Server Option", OptionFormat.ip),
+		  5 : DHCPOptionSpec("Name Server Option", OptionFormat.ip),
+		  6 : DHCPOptionSpec("Domain Name Server Option", OptionFormat.ip),
+		  7 : DHCPOptionSpec("Log Server Option", OptionFormat.ip),
+		  8 : DHCPOptionSpec("Cookie Server Option", OptionFormat.ip),
+		  9 : DHCPOptionSpec("LPR Server Option", OptionFormat.ip),
+		 10 : DHCPOptionSpec("Impress Server Option", OptionFormat.ip),
+		 11 : DHCPOptionSpec("Resource Location Server Option", OptionFormat.ip),
+		 12 : DHCPOptionSpec("Host Name Option", OptionFormat.str),
+		 13 : DHCPOptionSpec("Boot File Size Option", OptionFormat.u16),
+		 14 : DHCPOptionSpec("Merit Dump File", OptionFormat.str),
+		 15 : DHCPOptionSpec("Domain Name", OptionFormat.str),
+		 16 : DHCPOptionSpec("Swap Server", OptionFormat.ip),
+		 17 : DHCPOptionSpec("Root Path", OptionFormat.str),
+		 18 : DHCPOptionSpec("Extensions Path", OptionFormat.str),
+		 19 : DHCPOptionSpec("IP Forwarding Enable/Disable Option", OptionFormat.boolean),
+		 20 : DHCPOptionSpec("Non-Local Source Routing Enable/Disable Option", OptionFormat.boolean),
+		 21 : DHCPOptionSpec("Policy Filter Option", OptionFormat.ip),
+		 22 : DHCPOptionSpec("Maximum Datagram Reassembly Size", OptionFormat.u16),
+		 23 : DHCPOptionSpec("Default IP Time-to-live", OptionFormat.u8),
+		 24 : DHCPOptionSpec("Path MTU Aging Timeout Option", OptionFormat.u32),
+		 25 : DHCPOptionSpec("Path MTU Plateau Table Option", OptionFormat.u16),
+		 26 : DHCPOptionSpec("Interface MTU Option", OptionFormat.u16),
+		 27 : DHCPOptionSpec("All Subnets are Local Option", OptionFormat.boolean),
+		 28 : DHCPOptionSpec("Broadcast Address Option", OptionFormat.ip),
+		 29 : DHCPOptionSpec("Perform Mask Discovery Option", OptionFormat.boolean),
+		 30 : DHCPOptionSpec("Mask Supplier Option", OptionFormat.boolean),
+		 31 : DHCPOptionSpec("Perform Router Discovery Option", OptionFormat.boolean),
+		 32 : DHCPOptionSpec("Router Solicitation Address Option", OptionFormat.ip),
+		 33 : DHCPOptionSpec("Static Route Option", OptionFormat.ip),
+		 34 : DHCPOptionSpec("Trailer Encapsulation Option", OptionFormat.boolean),
+		 35 : DHCPOptionSpec("ARP Cache Timeout Option", OptionFormat.u32),
+		 36 : DHCPOptionSpec("Ethernet Encapsulation Option", OptionFormat.boolean),
+		 37 : DHCPOptionSpec("TCP Default TTL Option", OptionFormat.u8),
+		 38 : DHCPOptionSpec("TCP Keepalive Interval Option", OptionFormat.u32),
+		 39 : DHCPOptionSpec("TCP Keepalive Garbage Option", OptionFormat.boolean),
+		 40 : DHCPOptionSpec("Network Information Service Domain Option", OptionFormat.str),
+		 41 : DHCPOptionSpec("Network Information Servers Option", OptionFormat.ip),
+		 42 : DHCPOptionSpec("Network Time Protocol Servers Option", OptionFormat.ip),
+		 43 : DHCPOptionSpec("Vendor Specific Information", OptionFormat.none),
+		 44 : DHCPOptionSpec("NetBIOS over TCP/IP Name Server Option", OptionFormat.ip),
+		 45 : DHCPOptionSpec("NetBIOS over TCP/IP Datagram Distribution Server Option", OptionFormat.ip),
+		 46 : DHCPOptionSpec("NetBIOS over TCP/IP Node Type Option", OptionFormat.netbiosNodeType),
+		 47 : DHCPOptionSpec("NetBIOS over TCP/IP Scope Option", OptionFormat.str),
+		 48 : DHCPOptionSpec("X Window System Font Server Option", OptionFormat.ip),
+		 49 : DHCPOptionSpec("X Window System Display Manager Option", OptionFormat.ip),
+		 50 : DHCPOptionSpec("Requested IP Address", OptionFormat.none),
+		 51 : DHCPOptionSpec("IP Address Lease Time", OptionFormat.time),
+		 52 : DHCPOptionSpec("Option Overload", OptionFormat.none),
+		 53 : DHCPOptionSpec("DHCP Message Type", OptionFormat.dhcpMessageType),
+		 54 : DHCPOptionSpec("Server Identifier", OptionFormat.ip),
+		 55 : DHCPOptionSpec("Parameter Request List", OptionFormat.dhcpOptionType),
+		 56 : DHCPOptionSpec("Message", OptionFormat.none),
+		 57 : DHCPOptionSpec("Maximum DHCP Message Size", OptionFormat.none),
+		 58 : DHCPOptionSpec("Renewal (T1) Time Value", OptionFormat.time),
+		 59 : DHCPOptionSpec("Rebinding (T2) Time Value", OptionFormat.time),
+		 60 : DHCPOptionSpec("Vendor class identifier", OptionFormat.str),
+		 61 : DHCPOptionSpec("Client-identifier", OptionFormat.none),
+		 64 : DHCPOptionSpec("Network Information Service+ Domain Option", OptionFormat.str),
+		 65 : DHCPOptionSpec("Network Information Service+ Servers Option", OptionFormat.ip),
+		 66 : DHCPOptionSpec("TFTP server name", OptionFormat.str),
+		 67 : DHCPOptionSpec("Bootfile name", OptionFormat.str),
+		 68 : DHCPOptionSpec("Mobile IP Home Agent option", OptionFormat.ip),
+		 69 : DHCPOptionSpec("Simple Mail Transport Protocol (SMTP) Server Option", OptionFormat.ip),
+		 70 : DHCPOptionSpec("Post Office Protocol (POP3) Server Option", OptionFormat.ip),
+		 71 : DHCPOptionSpec("Network News Transport Protocol (NNTP) Server Option", OptionFormat.ip),
+		 72 : DHCPOptionSpec("Default World Wide Web (WWW) Server Option", OptionFormat.ip),
+		 73 : DHCPOptionSpec("Default Finger Server Option", OptionFormat.ip),
+		 74 : DHCPOptionSpec("Default Internet Relay Chat (IRC) Server Option", OptionFormat.ip),
+		 75 : DHCPOptionSpec("StreetTalk Server Option", OptionFormat.ip),
+		 76 : DHCPOptionSpec("StreetTalk Directory Assistance (STDA) Server Option", OptionFormat.ip),
+		 82 : DHCPOptionSpec("Relay Agent Information", OptionFormat.relayAgent),
+		255 : DHCPOptionSpec("End Option", OptionFormat.none),
+	];
 }
 
 DHCPPacket parsePacket(ubyte[] data)
@@ -293,7 +307,7 @@ ubyte[] serializePacket(DHCPPacket packet)
 
 string ip(uint addr) { return "%(%d.%)".format(cast(ubyte[])((&addr)[0..1])); }
 string ntime(uint n) { return "%d (%s)".format(n.ntohl, n.ntohl.seconds); }
-string maybeAscii(ubyte[] bytes)
+string maybeAscii(in ubyte[] bytes)
 {
 	string s = "%(%02X %)".format(bytes);
 	if (bytes.all!(b => (b >= 0x20 && b <= 0x7E) || !b))
@@ -302,26 +316,182 @@ string maybeAscii(ubyte[] bytes)
 }
 string formatDHCPOptionType(DHCPOptionType type)
 {
-	return format("%3d (%s)", cast(ubyte)type, dhcpOptionNames.get(type, "Unknown"));
+	return format("%3d (%s)", cast(ubyte)type, dhcpOptions.get(type, DHCPOptionSpec("Unknown")).name);
+}
+DHCPOptionType parseDHCPOptionType(string type)
+{
+	if (type.isNumeric)
+		return cast(DHCPOptionType)type.to!ubyte;
+	foreach (opt, spec; dhcpOptions)
+		if (!icmp(spec.name, type))
+			return cast(DHCPOptionType)opt;
+	throw new Exception("Unknown DHCP option type: " ~ type);
 }
 
-__gshared uint printOnly;
+struct RelayAgentInformation
+{
+	struct Suboption
+	{
+		enum Type : ubyte
+		{
+			agentCircuitID = 1,
+			agentRemoteID = 2,
+		}
+		Type type;
+		char[] value;
+
+		string toString() const { return format("%s=%s", type, value); }
+	}
+	Suboption[] suboptions;
+	ubyte[] slack;
+
+	this(inout(ubyte)[] bytes) inout
+	{
+		inout(Suboption)[] suboptions;
+		while (bytes.length >= 2)
+		{
+			auto len = bytes[1];
+			if (len < 2 || len > bytes.length)
+				break;
+			suboptions ~= inout Suboption(cast(Suboption.Type)bytes[0], cast(inout(char)[])bytes[2..len]);
+			bytes = bytes[len..$];
+		}
+		this.suboptions = suboptions;
+		this.slack = bytes;
+	}
+
+	string toString() const
+	{
+		string result = format("%(%s, %)", suboptions);
+		if (slack.length)
+			result ~= format(" Slack bytes=%(%02X %)", slack);
+		return result;
+	}
+}
+
+__gshared string printOnly;
 __gshared bool quiet;
+
+void printOption(File f, in ubyte[] bytes, OptionFormat fmt)
+{
+	try
+		final switch (fmt)
+		{
+			case OptionFormat.none:
+			case OptionFormat.hex:
+				f.writeln(maybeAscii(bytes));
+				break;
+			case OptionFormat.str:
+				f.writeln(cast(string)bytes);
+				break;
+			case OptionFormat.ip:
+				enforce(bytes.length % 4 == 0, "Bad IP bytes length");
+				f.writefln("%-(%s, %)", map!ip(cast(uint[])bytes));
+				break;
+			case OptionFormat.boolean:
+				f.writefln("%-(%s, %)", cast(bool[])bytes);
+				break;
+			case OptionFormat.u8:
+				f.writefln("%-(%s, %)", bytes);
+				break;
+			case OptionFormat.u16:
+				enforce(bytes.length % 2 == 0, "Bad u16 bytes length");
+				f.writefln("%-(%s, %)", (cast(ushort[])bytes).map!ntohs);
+				break;
+			case OptionFormat.u32:
+				enforce(bytes.length % 4 == 0, "Bad u32 bytes length");
+				f.writefln("%-(%s, %)", (cast(uint[])bytes).map!ntohl);
+				break;
+			case OptionFormat.time:
+				enforce(bytes.length % 4 == 0, "Bad time bytes length");
+				f.writefln("%-(%s, %)", map!ntime(cast(uint[])bytes));
+				break;
+			case OptionFormat.dhcpMessageType:
+				enforce(bytes.length==1, "Bad dhcpMessageType data length");
+				f.writeln(cast(DHCPMessageType)bytes[0]);
+				break;
+			case OptionFormat.dhcpOptionType:
+				f.writefln("%-(%s, %)", map!formatDHCPOptionType(cast(DHCPOptionType[])bytes));
+				break;
+			case OptionFormat.netbiosNodeType:
+				enforce(bytes.length==1, "Bad netbiosNodeType data length");
+				f.writefln("%-(%s, %)", bytes
+					.map!(b =>
+						NETBIOSNodeTypeChars
+						.length
+						.iota
+						.filter!(i => (1 << i) & b)
+						.map!(i => NETBIOSNodeTypeChars[i])
+						.array
+					)
+				);
+				break;
+			case OptionFormat.relayAgent:
+				f.writeln((const RelayAgentInformation(bytes)).toString());
+				break;
+		}
+	catch (Exception e)
+		f.writefln("Decode error(%s). Raw bytes: %s",
+			e.msg, maybeAscii(bytes));
+}
+
+void printRawOption(File f, in ubyte[] bytes, OptionFormat fmt)
+{
+	final switch (fmt)
+	{
+		case OptionFormat.none:
+		case OptionFormat.hex:
+		case OptionFormat.relayAgent:
+			f.writefln("%-(%02X%)", bytes);
+			break;
+		case OptionFormat.str:
+			f.write(cast(char[])bytes);
+			f.flush();
+			break;
+		case OptionFormat.ip:
+		case OptionFormat.boolean:
+		case OptionFormat.u8:
+		case OptionFormat.u16:
+		case OptionFormat.u32:
+		case OptionFormat.dhcpMessageType:
+		case OptionFormat.dhcpOptionType:
+		case OptionFormat.netbiosNodeType:
+			return printOption(f, bytes, fmt);
+		case OptionFormat.time:
+			return printOption(f, bytes, OptionFormat.u32);
+	}
+}
 
 void printPacket(File f, DHCPPacket packet)
 {
-	if (printOnly)
+	if (printOnly != "")
 	{
+		string numStr = printOnly;
+		string fmtStr = "";
+		if (numStr.endsWith("]"))
+		{
+			auto numParts = printOnly.findSplit("[");
+			fmtStr = numParts[2][0..$-1];
+			numStr = numParts[0];
+		}
+		auto opt = parseDHCPOptionType(numStr);
+
+		OptionFormat fmt = fmtStr.length ? fmtStr.to!OptionFormat : OptionFormat.none;
+		if (fmt == OptionFormat.none)
+			fmt = dhcpOptions.get(opt, DHCPOptionSpec.init).format;
+
 		foreach (option; packet.options)
-			if (option.type == printOnly)
+		{
+			if (option.type == opt)
 			{
-				f.write(cast(char[])option.data);
-				f.flush();
+				printRawOption(f, option.data, fmt);
 				return;
 			}
-		if (!quiet) stderr.writefln("(No option %s in packet)", printOnly);
+		}
+		if (!quiet) stderr.writefln("(No option %s in packet)", opt);
 		return;
 	}
+
 
 	auto opNames = [1:"BOOTREQUEST",2:"BOOTREPLY"];
 	f.writefln("  op=%s chaddr=%(%02X:%) hops=%d xid=%08X secs=%d flags=%04X\n  ciaddr=%s yiaddr=%s siaddr=%s giaddr=%s sname=%s file=%s",
@@ -344,44 +514,8 @@ void printPacket(File f, DHCPPacket packet)
 	{
 		auto type = cast(DHCPOptionType)option.type;
 		f.writef("    %s: ", formatDHCPOptionType(type));
-		switch (type)
-		{
-			case DHCPOptionType.dhcpMessageType:
-				enforce(option.data.length==1, "Bad dhcpMessageType data length");
-				f.writeln(cast(DHCPMessageType)option.data[0]);
-				break;
-			case DHCPOptionType.netbiosNodeType:
-				enforce(option.data.length==1, "Bad netbiosNodeType data length");
-				f.writeln(cast(NETBIOSNodeType)option.data[0]);
-				break;
-			case DHCPOptionType.subnetMask:
-			case DHCPOptionType.router:
-			case DHCPOptionType.timeServer:
-			case DHCPOptionType.nameServer:
-			case DHCPOptionType.domainNameServer:
-			case DHCPOptionType.broadcastServerOption:
-			case DHCPOptionType.serverIdentifier:
-				enforce(option.data.length % 4 == 0, "Bad IP option data length");
-				f.writefln("%-(%s, %)", map!ip(cast(uint[])option.data));
-				break;
-			case DHCPOptionType.domainName:
-			case DHCPOptionType.tftpServerName:
-			case DHCPOptionType.bootfileName:
-				f.writeln(cast(string)option.data);
-				break;
-			case DHCPOptionType.timeOffset:
-			case DHCPOptionType.leaseTime:
-			case DHCPOptionType.renewalTime:
-			case DHCPOptionType.rebindingTime:
-				enforce(option.data.length % 4 == 0, "Bad integer option data length");
-				f.writefln("%-(%s, %)", map!ntime(cast(uint[])option.data));
-				break;
-			case DHCPOptionType.parameterRequestList:
-				f.writefln("%-(%s, %)", map!formatDHCPOptionType(cast(DHCPOptionType[])option.data));
-				break;
-			default:
-				f.writeln(maybeAscii(option.data));
-		}
+		auto format = dhcpOptions.get(type, DHCPOptionSpec.init).format;
+		printOption(f, option.data, format);
 	}
 
 	f.flush();
@@ -390,8 +524,9 @@ void printPacket(File f, DHCPPacket packet)
 enum SERVER_PORT = 67;
 enum CLIENT_PORT = 68;
 
-ubyte[] requestedOptions;
+string[] requestedOptions;
 string[] sentOptions;
+ushort requestSecs = 0;
 
 DHCPPacket generatePacket(ubyte[] mac)
 {
@@ -401,43 +536,39 @@ DHCPPacket generatePacket(ubyte[] mac)
 	packet.header.hlen = 6;
 	packet.header.hops = 0;
 	packet.header.xid = uniform!uint();
+	packet.header.secs = requestSecs;
 	packet.header.flags = htons(0x8000); // Set BROADCAST flag - required to be able to receive a reply to an imaginary hardware address
 	packet.header.chaddr[0..mac.length] = mac;
 	foreach (ref b; packet.header.chaddr[mac.length..packet.header.hlen])
 		b = uniform!ubyte();
-	packet.options ~= DHCPOption(DHCPOptionType.dhcpMessageType, [DHCPMessageType.discover]);
 	if (requestedOptions.length)
-		packet.options ~= DHCPOption(DHCPOptionType.parameterRequestList, requestedOptions);
+		packet.options ~= DHCPOption(DHCPOptionType.parameterRequestList, cast(ubyte[])requestedOptions.map!parseDHCPOptionType.array);
 	foreach (option; sentOptions)
 	{
 		scope(failure) stderr.writeln("Error with parsing option ", option, ":");
 		auto s = option.findSplit("=");
-		string num = s[0];
+		string numStr = s[0];
 		string value = s[2];
-		string fmt;
-		if (num.endsWith("]"))
+		string fmtStr;
+		if (numStr.endsWith("]"))
 		{
-			auto numParts = num.findSplit("[");
-			fmt = numParts[2][0..$-1];
-			num = numParts[0];
+			auto numParts = numStr.findSplit("[");
+			fmtStr = numParts[2][0..$-1];
+			numStr = numParts[0];
 		}
+		auto opt = parseDHCPOptionType(numStr);
 		ubyte[] bytes;
-		switch (fmt)
+		OptionFormat fmt = fmtStr.length ? fmtStr.to!OptionFormat : OptionFormat.none;
+		if (fmt == OptionFormat.none)
+			fmt = dhcpOptions.get(opt, DHCPOptionSpec.init).format;
+		final switch (fmt)
 		{
-			case "":
+			case OptionFormat.none:
+				throw new Exception(format("Don't know how to interpret given value for option %d, please specify a format explicitly.", opt));
+			case OptionFormat.str:
 				bytes = cast(ubyte[])value;
 				break;
-			case "hex":
-				static ubyte fromHex(string os) { auto s = os; ubyte b = s.parse!ubyte(16); enforce(!s.length, "Invalid hex string: " ~ os); return b; }
-				bytes = value
-					.replace(" ", "")
-					.replace(":", "")
-					.chunks(2)
-					.map!(chunk => fromHex(to!string(chunk)))
-					.array();
-				break;
-			case "ip":
-			case "IP":
+			case OptionFormat.ip:
 				bytes = value
 					.replace(" ", ".")
 					.replace(",", ".")
@@ -446,11 +577,83 @@ DHCPPacket generatePacket(ubyte[] mac)
 					.array();
 				enforce(bytes.length % 4 == 0, "Malformed IP address");
 				break;
-			default:
-				throw new Exception("Unknown format: " ~ fmt);
+			case OptionFormat.hex:
+				static ubyte fromHex(string os) { auto s = os; ubyte b = s.parse!ubyte(16); enforce(!s.length, "Invalid hex string: " ~ os); return b; }
+				bytes = value
+					.replace(" ", "")
+					.replace(":", "")
+					.chunks(2)
+					.map!(chunk => fromHex(to!string(chunk)))
+					.array();
+				break;
+			case OptionFormat.boolean:
+				bytes = value
+					.splitter(",")
+					.map!strip
+					.map!(to!bool)
+					.map!(b => ubyte(b))
+					.array();
+				break;
+			case OptionFormat.u8:
+				bytes = value
+					.splitter(",")
+					.map!strip
+					.map!(to!ubyte)
+					.array();
+				break;
+			case OptionFormat.u16:
+				bytes = value
+					.splitter(",")
+					.map!strip
+					.map!(to!ushort)
+					.map!htons
+					.map!((ushort i) { ushort[] a = [i]; ubyte[] b = cast(ubyte[])a; return b; })
+					.join();
+				break;
+			case OptionFormat.u32:
+			case OptionFormat.time:
+				bytes = value
+					.splitter(",")
+					.map!strip
+					.map!(to!int)
+					.map!htonl
+					.map!((int i) { int[] a = [i]; ubyte[] b = cast(ubyte[])a; return b; })
+					.join();
+				break;
+			case OptionFormat.dhcpMessageType:
+				bytes = value
+					.splitter(",")
+					.map!strip
+					.map!(to!DHCPMessageType)
+					.map!((ubyte i) => [i])
+					.join();
+				break;
+			case OptionFormat.dhcpOptionType:
+				bytes = value
+					.splitter(",")
+					.map!strip
+					.map!parseDHCPOptionType
+					.map!((ubyte i) => [i])
+					.join();
+				break;
+			case OptionFormat.netbiosNodeType:
+				bytes = value
+					.splitter(",")
+					.map!strip
+					.map!(s => s
+						.map!(c => NETBIOSNodeTypeChars.indexOf(c))
+						.map!(i => (1 << i).to!ubyte)
+						.fold!((a, b) => ubyte(a | b))
+					)
+					.array();
+				break;
+			case OptionFormat.relayAgent:
+				throw new Exception(format("Sorry, the format %s is unsupported for parsing. Please specify another format explicitly.", fmt));
 		}
-		packet.options ~= DHCPOption(cast(DHCPOptionType)to!ubyte(num), bytes);
+		packet.options ~= DHCPOption(opt, bytes);
 	}
+	if (packet.options.all!(option => option.type != DHCPOptionType.dhcpMessageType))
+		packet.options = DHCPOption(DHCPOptionType.dhcpMessageType, [DHCPMessageType.discover]) ~ packet.options;
 	return packet;
 }
 
@@ -514,12 +717,13 @@ ubyte[] parseMac(string mac)
 	return mac.split(":").map!(s => s.parse!ubyte(16)).array();
 }
 
-int main(string[] args)
+int run(string[] args)
 {
 	string bindAddr = "0.0.0.0";
+	string iface = null;
 	string defaultMac;
 	bool help, query, wait;
-	float timeoutSeconds = 0f;
+	float timeoutSeconds = 60f;
 	uint tries = 1;
 
 	enum forever = 1000.days;
@@ -527,7 +731,9 @@ int main(string[] args)
 	getopt(args,
 		"h|help", &help,
 		"bind", &bindAddr,
+		"iface", &iface,
 		"mac", &defaultMac,
+		"secs", &requestSecs,
 		"q|quiet", &quiet,
 		"query", &query,
 		"wait", &wait,
@@ -545,7 +751,7 @@ int main(string[] args)
 
 	if (!quiet)
 	{
-		stderr.writeln("dhcptest v0.5 - Written by Vladimir Panteleev");
+		stderr.writeln("dhcptest v0.7 - Created by Vladimir Panteleev");
 		stderr.writeln("https://github.com/CyberShadow/dhcptest");
 		stderr.writeln("Run with --help for a list of command-line options.");
 		stderr.writeln();
@@ -558,26 +764,39 @@ int main(string[] args)
 		stderr.writeln("Options:");
 		stderr.writeln("  --bind IP       Listen on the interface with the specified IP.");
 		stderr.writeln("                  The default is to listen on all interfaces (0.0.0.0).");
+		stderr.writeln("                  On Linux, you should use --iface instead.");
+		stderr.writeln("  --iface NAME    Bind to the specified network interface name.  Linux only.");
 		stderr.writeln("  --mac MAC       Specify a MAC address to use for the client hardware");
 		stderr.writeln("                  address field (chaddr), in the format NN:NN:NN:NN:NN:NN");
+		stderr.writeln("  --secs          Specify the \"Secs\" request field (number of seconds elapsed");
+		stderr.writeln("                  since a client began an attempt to acquire or renew a lease)");
 		stderr.writeln("  --quiet         Suppress program output except for received data");
 		stderr.writeln("                  and error messages");
 		stderr.writeln("  --query         Instead of starting an interactive prompt, immediately send");
 		stderr.writeln("                  a discover packet, wait for a result, print it and exit.");
 		stderr.writeln("  --wait          Wait until timeout elapsed before exiting from --query, all");
 		stderr.writeln("                  offers returned will be reported.");
-		stderr.writeln("  --option N=STR  Add a string option with code N and content STR to the");
-		stderr.writeln("                  request packet. E.g. to specify a Vendor Class Identifier:");
+		stderr.writeln("  --option OPTION Add an option to the request packet. The option must be");
+		stderr.writeln("                  specified using the syntax CODE=VALUE or CODE[FORMAT]=VALUE,");
+		stderr.writeln("                  where CODE is the numeric option number, FORMAT is how the");
+		stderr.writeln("                  value is to be interpreted and decoded, and VALUE is the");
+		stderr.writeln("                  option value. FORMAT may be omitted for known option CODEs");
+		stderr.writeln("                  E.g. to specify a Vendor Class Identifier:");
 		stderr.writeln("                  --option \"60=Initech Groupware\"");
 		stderr.writeln("                  You can specify hexadecimal or IPv4-formatted options using");
 		stderr.writeln("                  --option \"N[hex]=...\" or --option \"N[IP]=...\"");
+		stderr.writeln("                  Supported FORMAT types:");
+		stderr.write("%-(%s, %)".format(EnumMembers!OptionFormat[1..$].only.uniq).wrap(79, "                    ", "                    "));
 		stderr.writeln("  --request N     Uses DHCP option 55 (\"Parameter Request List\") to");
 		stderr.writeln("                  explicitly request the specified option from the server.");
 		stderr.writeln("                  Can be repeated several times to request multiple options.");
 		stderr.writeln("  --print-only N  Print only the specified DHCP option.");
-		stderr.writeln("                  It is assumed to be a text string.");
+		stderr.writeln("                  You can specify a desired format using the syntax N[FORMAT]");
+		stderr.writeln("                  See above for a list of FORMATs. For example:");
+		stderr.writeln("                  --print-only \"N[hex]\" or --print-only \"N[IP]\"");
 		stderr.writeln("  --timeout N     Wait N seconds for a reply, after which retry or exit.");
-		stderr.writeln("                  Default is 10 seconds. Can be a fractional number. ");
+		stderr.writeln("                  Default is 60 seconds. Can be a fractional number.");
+		stderr.writeln("                  A value of 0 causes dhcptest to wait indefinitely.");
 		stderr.writeln("  --tries N       Send N DHCP discover packets after each timeout interval.");
 		stderr.writeln("                  Specify N=0 to retry indefinitely.");
 		return 0;
@@ -588,6 +807,17 @@ int main(string[] args)
 
 	void bindSocket()
 	{
+		version (linux)
+		{
+			if (iface)
+			{
+				enum SO_BINDTODEVICE = cast(SocketOption)25;
+				socket.setOption(SocketOptionLevel.SOCKET, SO_BINDTODEVICE, cast(void[])iface);
+			}
+		}
+		else
+			enforce(iface is null, "--iface is not available on this platform");
+
 		socket.setOption(SocketOptionLevel.SOCKET, SocketOption.REUSEADDR, 1);
 		socket.bind(getAddress(bindAddr, CLIENT_PORT)[0]);
 		if (!quiet) stderr.writefln("Listening for DHCP replies on port %d.", CLIENT_PORT);
@@ -600,7 +830,7 @@ int main(string[] args)
 		catch (Exception e)
 		{
 			stderr.writeln("Error while attempting to bind socket:");
-			stderr.writeln(e);
+			stderr.writeln(e.msg);
 			stderr.writeln("Replies will not be visible. Use a packet capture tool to see replies,");
 			stderr.writeln("or try re-running the program with more permissions.");
 		}
@@ -678,7 +908,7 @@ int main(string[] args)
 		if (tries == 0)
 			tries = tries.max;
 		if (timeout == Duration.zero)
-			timeout = (tries == 1 && !wait) ? forever : 10.seconds;
+			timeout = forever;
 
 		bindSocket();
 		auto sentPacket = generatePacket(parseMac(defaultMac));
@@ -730,5 +960,21 @@ int main(string[] args)
 	{
 		runPrompt();
 		return 0;
+	}
+}
+
+int main(string[] args)
+{
+	debug
+		return run(args);
+	else
+	{
+		try
+			return run(args);
+		catch (Exception e)
+		{
+			stderr.writeln("Fatal error: ", e.msg);
+			return 1;
+		}
 	}
 }
